@@ -1,0 +1,57 @@
+name: Get Spotify refresh token (one-time helper)
+
+on:
+  workflow_dispatch:
+    inputs:
+      redirect_url:
+        description: "Paste the FULL URL from your browser address bar after approving Spotify (starts with http://127.0.0.1:8888/callback?code=...)"
+        required: true
+
+jobs:
+  exchange:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exchange authorization code for refresh token
+        shell: python
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          REDIRECT_URL: ${{ github.event.inputs.redirect_url }}
+        run: |
+          import base64, json, os, urllib.parse, urllib.request
+
+          raw = os.environ["REDIRECT_URL"].strip()
+          q = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
+          code = q.get("code", [raw])[0]
+
+          data = urllib.parse.urlencode({
+              "grant_type": "authorization_code",
+              "code": code,
+              "redirect_uri": "http://127.0.0.1:8888/callback",
+          }).encode()
+          basic = base64.b64encode(
+              (os.environ["SPOTIFY_CLIENT_ID"] + ":" +
+               os.environ["SPOTIFY_CLIENT_SECRET"]).encode()).decode()
+          req = urllib.request.Request(
+              "https://accounts.spotify.com/api/token", data=data,
+              headers={"Authorization": "Basic " + basic})
+          try:
+              resp = json.load(urllib.request.urlopen(req))
+          except urllib.error.HTTPError as e:
+              print("Spotify rejected the code:", e.read().decode())
+              print("Codes expire after ~10 minutes - redo the approve step "
+                    "and run this again with the fresh URL.")
+              raise SystemExit(1)
+
+          users = json.dumps([{
+              "name": "James",
+              "email": "jabauer2426@gmail.com",
+              "refresh_token": resp["refresh_token"],
+          }])
+          print("=" * 70)
+          print("SUCCESS. Copy the single line between the markers into the")
+          print("USERS_JSON repository secret, then DELETE this workflow run")
+          print("(... menu on the run page) since this repo is public.")
+          print("=" * 70)
+          print(users)
+          print("=" * 70)
