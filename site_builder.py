@@ -114,12 +114,11 @@ function card(e, isMatch){
     if ((e.similar||[]).length)
       bits.push("similar to " + e.similar.map(esc).join(", "));
     if ((e.songs||[]).length){
+      const artistName = e.name || "";
       const songs = e.songs.map(function(s){
-        if (s.preview)
-          return '<button data-src="'+esc(s.preview)+'">▶ '+esc(s.name)+'</button>';
-        if (s.url)
-          return '<a href="'+esc(s.url)+'" target="_blank"><i>'+esc(s.name)+'</i></a>';
-        return '<i>'+esc(s.name)+'</i>';
+        return '<button data-artist="'+esc(artistName)+'" data-track="'+esc(s.name)
+          +'" data-src="'+esc(s.preview||"")+'" data-url="'+esc(s.url||"")
+          +'">▶ '+esc(s.name)+'</button>';
       }).join(" ");
       bits.push('<span class="songs">try: '+songs+'</span>');
     }
@@ -182,21 +181,65 @@ function render(){
     shown.length + " of your artists · " + total + " discovery picks shown";
 
   document.querySelectorAll(".songs button").forEach(function(btn){
-    btn.addEventListener("click", function(){
-      if (playingBtn === btn){ audio.pause(); reset(); return; }
-      if (audio) audio.pause();
-      reset();
-      audio = new Audio(btn.dataset.src);
-      audio.play();
-      btn.classList.add("playing");
-      playingBtn = btn;
-      audio.onended = reset;
-    });
+    btn.addEventListener("click", function(){ resolveAndPlay(btn); });
   });
 }
 function reset(){
   if (playingBtn) playingBtn.classList.remove("playing");
   playingBtn = null;
+}
+
+function deezerJsonp(q){
+  return new Promise(function(resolve){
+    var cb = "dz" + Math.random().toString(36).slice(2);
+    var s = document.createElement("script");
+    var done = function(d){ resolve(d); delete window[cb]; s.remove(); };
+    window[cb] = done;
+    s.src = "https://api.deezer.com/search?limit=3&output=jsonp&callback="
+          + cb + "&q=" + encodeURIComponent(q);
+    s.onerror = function(){ done(null); };
+    setTimeout(function(){ if (window[cb]) done(null); }, 6000);
+    document.body.appendChild(s);
+  });
+}
+
+async function freshPreview(btn){
+  if (btn.dataset.res) return btn.dataset.res;
+  var a = btn.dataset.artist || "", tr = btn.dataset.track || "";
+  var d = await deezerJsonp('artist:"' + a + '" track:"' + tr + '"');
+  var hit = d && d.data && d.data[0];
+  if (!(hit && hit.preview)) {
+    d = await deezerJsonp(a + " " + tr);
+    hit = d && d.data && d.data[0];
+  }
+  var p = (hit && hit.preview) || btn.dataset.src || "";
+  if (p) btn.dataset.res = p;
+  return p;
+}
+
+async function resolveAndPlay(btn){
+  if (playingBtn === btn){ if (audio) audio.pause(); reset(); return; }
+  if (audio) audio.pause();
+  reset();
+  btn.classList.add("playing");
+  playingBtn = btn;
+  var src = await freshPreview(btn);
+  if (playingBtn !== btn) return; // user clicked elsewhere meanwhile
+  if (!src){
+    reset();
+    if (btn.dataset.url) window.open(btn.dataset.url, "_blank");
+    return;
+  }
+  audio = new Audio(src);
+  audio.onended = reset;
+  audio.onerror = function(){
+    reset();
+    if (btn.dataset.url) window.open(btn.dataset.url, "_blank");
+  };
+  audio.play().catch(function(){
+    reset();
+    if (btn.dataset.url) window.open(btn.dataset.url, "_blank");
+  });
 }
 
 (function init(){
