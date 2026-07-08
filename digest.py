@@ -140,13 +140,21 @@ def pages_base_url():
 
 
 def load_users():
+    """USERS_JSON entries support optional feature flags:
+      "digest": true/false (default true)  — Monday concert digest email/page
+      "songs":  true/false (default true)  — Wednesday top-songs GroupMe drop
+    "email" is only required for digest members."""
     raw = os.environ.get("USERS_JSON", "").strip()
     if raw:
         users = json.loads(raw)
         for u in users:
-            for field in ("name", "email", "refresh_token"):
+            for field in ("name", "refresh_token"):
                 if not u.get(field):
                     raise ValueError(f"USERS_JSON entry missing '{field}'")
+            if u.get("digest", True) and not u.get("email"):
+                raise ValueError(
+                    f"USERS_JSON entry for {u['name']} needs 'email' "
+                    "(or set \"digest\": false)")
         return users
     return [
         {
@@ -380,12 +388,22 @@ def show_price(url):
 # ---------------------------------------------------------------- Spotify ---
 
 def spotify_token(refresh_token):
+    """Refresh an access token. Handles both token flavors: ones issued
+    with the client secret, and ones issued via the browser signup page
+    (PKCE — refreshed with client_id in the body, no Basic auth)."""
+    url = "https://accounts.spotify.com/api/token"
+    data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
     r = requests.post(
-        "https://accounts.spotify.com/api/token",
-        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+        url, data=data,
         auth=(os.environ["SPOTIFY_CLIENT_ID"], os.environ["SPOTIFY_CLIENT_SECRET"]),
         timeout=30,
     )
+    if r.status_code == 400:
+        r = requests.post(
+            url,
+            data={**data, "client_id": os.environ["SPOTIFY_CLIENT_ID"]},
+            timeout=30,
+        )
     r.raise_for_status()
     return r.json()["access_token"]
 
@@ -918,7 +936,7 @@ def send_email(to, subject, html_body):
 # ------------------------------------------------------------------- Main ---
 
 def main():
-    users = load_users()
+    users = [u for u in load_users() if u.get("digest", True)]
     today = date.today()
     end = today + timedelta(days=LOOKAHEAD_DAYS - 1)
     base_url = pages_base_url()

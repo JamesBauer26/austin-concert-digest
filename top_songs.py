@@ -81,7 +81,7 @@ def post_groupme(text):
 
 
 def main():
-    users = load_users()
+    users = [u for u in load_users() if u.get("songs", True)]
     lines, failures = [], 0
     for user in users:
         log(f"=== {user['name']} ===")

@@ -274,12 +274,150 @@ async function resolveAndPlay(btn){
 """
 
 
+JOIN_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Join Song of the Week</title>
+<style>
+body{background:#101016;color:#eee;font-family:Helvetica,Arial,sans-serif;
+margin:0;padding:24px}
+.wrap{max-width:460px;margin:auto}
+h1{font-size:22px}
+p,li{color:#b8b8c4;font-size:14px;line-height:1.6}
+input{width:100%;box-sizing:border-box;background:#181820;color:#eee;
+border:1px solid #2a2a35;border-radius:8px;padding:10px;font-size:15px;
+margin:8px 0}
+button,.btn{display:inline-block;background:#1DB954;color:#000;font-weight:bold;
+font-size:15px;padding:11px 22px;border-radius:22px;border:none;cursor:pointer;
+text-decoration:none;margin-top:8px}
+pre{background:#181820;border:1px solid #2a2a35;border-radius:8px;padding:12px;
+white-space:pre-wrap;word-break:break-all;color:#1DB954;font-size:12px}
+.err{color:#ff6b6b}
+.hide{display:none}
+</style></head><body><div class="wrap">
+<h1>\U0001F3A7 Join Song of the Week</h1>
+<div id="step1">
+<p>Every Wednesday, everyone's most-played song of the week gets dropped in
+the group chat. Connecting your Spotify takes ~30 seconds:</p>
+<ol>
+<li>Make sure James has already added your Spotify email (ask him!)</li>
+<li>Type your first name below and hit Connect</li>
+<li>Approve on Spotify, then send James the code that appears</li>
+</ol>
+<input id="name" placeholder="Your first name" maxlength="30">
+<button id="go">Connect Spotify</button>
+<p class="err hide" id="err1"></p>
+</div>
+<div id="step2" class="hide">
+<p><b style="color:#fff">You're in \U0001F389</b> — copy this whole block and
+text/DM it to James. He'll add you and your songs start appearing in the
+group chat.</p>
+<pre id="snippet"></pre>
+<button id="copy">Copy to clipboard</button>
+<p class="err hide" id="err2"></p>
+</div>
+<script>
+var CLIENT_ID = "__CLIENT_ID__";
+var REDIRECT = "__REDIRECT__";
+var SCOPES = "user-top-read user-follow-read user-library-read " +
+             "user-read-recently-played";
+
+function b64url(buf){
+  return btoa(String.fromCharCode.apply(null, new Uint8Array(buf)))
+    .replace(/\\+/g,"-").replace(/\\//g,"_").replace(/=+$/,"");
+}
+async function sha256(s){
+  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+}
+function rand(n){
+  var a = new Uint8Array(n); crypto.getRandomValues(a);
+  return Array.from(a, function(b){return ("0"+b.toString(16)).slice(-2);})
+    .join("");
+}
+
+document.getElementById("go").addEventListener("click", async function(){
+  var name = document.getElementById("name").value.trim();
+  if (!name){ show("err1","Type your name first"); return; }
+  var verifier = rand(48);
+  sessionStorage.setItem("pkce_v", verifier);
+  sessionStorage.setItem("join_name", name);
+  var challenge = b64url(await sha256(verifier));
+  location.href = "https://accounts.spotify.com/authorize" +
+    "?client_id=" + CLIENT_ID +
+    "&response_type=code" +
+    "&redirect_uri=" + encodeURIComponent(REDIRECT) +
+    "&scope=" + encodeURIComponent(SCOPES) +
+    "&code_challenge_method=S256&code_challenge=" + challenge;
+});
+
+function show(id, msg){
+  var el = document.getElementById(id);
+  el.textContent = msg; el.classList.remove("hide");
+}
+
+(async function init(){
+  var code = new URLSearchParams(location.search).get("code");
+  if (!code) return;
+  document.getElementById("step1").classList.add("hide");
+  document.getElementById("step2").classList.remove("hide");
+  var verifier = sessionStorage.getItem("pkce_v") || "";
+  var name = sessionStorage.getItem("join_name") || "";
+  try {
+    var r = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      body: new URLSearchParams({
+        grant_type: "authorization_code", code: code,
+        redirect_uri: REDIRECT, client_id: CLIENT_ID,
+        code_verifier: verifier,
+      }),
+    });
+    var d = await r.json();
+    if (!d.refresh_token) throw new Error(d.error_description || "no token");
+    var snippet = JSON.stringify({name: name || "FIRSTNAME",
+      refresh_token: d.refresh_token, digest: false});
+    document.getElementById("snippet").textContent = snippet;
+    document.getElementById("copy").addEventListener("click", function(){
+      navigator.clipboard.writeText(snippet);
+      this.textContent = "Copied \u2713";
+    });
+    history.replaceState(null, "", REDIRECT);
+  } catch (e) {
+    show("err2", "Hmm, that didn't work (" + e.message + "). Most common " +
+      "cause: James hasn't added your Spotify email yet, or the link was " +
+      "reused - go back and hit Connect again.");
+  }
+})();
+</script></div></body></html>
+"""
+
+
+def _base_url():
+    if os.environ.get("PAGES_BASE_URL"):
+        return os.environ["PAGES_BASE_URL"].rstrip("/")
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if "/" in repo:
+        owner, name = repo.split("/", 1)
+        return f"https://{owner}.github.io/{name}"
+    return ""
+
+
 def build_site(users_data, out_dir, today, end):
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, ".nojekyll"), "w") as f:
         f.write("")
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(LANDING)
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID", "")
+    base = _base_url()
+    if client_id and base:
+        join_dir = os.path.join(out_dir, "join")
+        os.makedirs(join_dir, exist_ok=True)
+        with open(os.path.join(join_dir, "index.html"), "w",
+                  encoding="utf-8") as f:
+            f.write(JOIN_TEMPLATE
+                    .replace("__CLIENT_ID__", client_id)
+                    .replace("__REDIRECT__", base + "/join/"))
     window = (
         f"{today.strftime('%b')} {today.day} – {end.strftime('%b')} {end.day}, "
         f"{end.year}"

@@ -82,32 +82,31 @@ Repo → **Actions** tab → "Weekly Austin Concert Digest" → **Run workflow**
 Digests land in ~2-5 minutes; the web page link is at the top of the email.
 After that it runs every Monday automatically.
 
-## 👥 Inviting someone (~5 min each)
+## 👥 How friends sign up (songs only, ~2 min each)
 
-Spotify apps in development mode allow up to 25 users, and each must be
-allowlisted first:
+Friends join the Wednesday Song-of-the-Week drop without getting the
+concert digest. No installs — everything happens in their browser:
 
-1. **Allowlist them**: Spotify dashboard → your app → **User Management** →
-   add their name + the email on their Spotify account
-2. **They authorize**: send them `get_refresh_token.py` plus your Client ID
-   and Secret (privately!). They run:
+1. **You**: add their Spotify account email in the Spotify dashboard →
+   your app → **User Management** (dev-mode apps require this, max 25).
+   Also add them to the GroupMe group.
+2. **Them**: send them the signup link — `<your pages URL>/join/`.
+   They type their name, hit Connect, approve on Spotify, and the page
+   shows a code block they copy and text back to you.
+3. **You**: paste their block as a new entry in the `USERS_JSON` secret:
+   ```json
+   [
+     {"name": "James", "email": "...", "refresh_token": "..."},
+     {"name": "Sam", "refresh_token": "AQ...", "digest": false}
+   ]
    ```
-   pip install requests
-   python get_refresh_token.py
-   ```
-   approve in the browser, and send you back the refresh token it prints.
-3. **Add them**: edit the `USERS_JSON` secret, append
-   `{"name": "Sam", "email": "sam@x.com", "refresh_token": "AQC..."}`
 
-They're in the next Monday run. To remove someone, delete their entry.
+Feature flags per entry: `"digest": false` = no concert emails (songs
+only). `"songs": false` = the reverse. Both default to true.
 
-Notes:
-- Each person's digest is matched to *their* listening; artist lookups are
-  cached so extra users barely add runtime
-- If one person's token breaks, everyone else still gets their digest; the
-  broken user gets an error email
-- Beyond 25 people you'd need Spotify extended-quota approval (a review
-  process) — at that point this becomes a real hosted app; different project
+One-time prerequisite for the signup page: in the Spotify dashboard →
+your app → Settings → add `<your pages URL>/join/` as a second
+**Redirect URI** (keep the existing one too).
 
 ## 🎧 Weekly Top Songs group chat (GroupMe)
 
