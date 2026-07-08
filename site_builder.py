@@ -104,7 +104,7 @@ function card(e, isMatch){
             + esc(isMatch ? e.artist : e.name) + '</a>';
   if (e.spotify_url) title += '<a class="sp" href="'+esc(e.spotify_url)
             +'" target="_blank">Spotify</a>';
-  const meta = [ (e.genres||[]).join(", "), fmtDay(e.date), e.venue, e.time ]
+  const meta = [ (e.genres||[]).join(", "), fmtDay(e.date), e.venue, e.time, e.price ]
       .filter(Boolean).map(esc).join(" · ");
   let detail = "";
   if (isMatch) {

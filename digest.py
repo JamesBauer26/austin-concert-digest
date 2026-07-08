@@ -53,6 +53,7 @@ SIMILAR_CACHE = {}  # norm name -> [similar artist names] (last.fm only)
 DEEZER_CACHE = {}   # norm name -> {"image","url","songs"}
 SP_CACHE = {}       # norm name -> spotify info dict or None
 TRACKS_CACHE = {}   # spotify artist id -> [{"name","url","preview"}]
+PRICE_CACHE = {}    # url -> price string ("$15", "$10\u2013$20", "Free", "")
 
 SKIP_KEYWORDS = [
     "world cup", "bingo", "trivia", "karaoke", "open mic", "comedy",
@@ -281,6 +282,99 @@ def deezer_info(name):
     DEEZER_CACHE[key] = info
     time.sleep(0.05)
     return info
+
+
+# ------------------------------------------------------------------ Price ---
+
+def _fmt_price(lo, hi=None):
+    def f(v):
+        v = float(v)
+        return f"${v:g}"
+    if hi is not None and float(hi) > float(lo):
+        return f"{f(lo)}\u2013{f(hi)}"
+    return f(lo)
+
+
+def show_price(url):
+    """Best-effort ticket price from a show's ticket page.
+    Reads schema.org JSON-LD offers first, then falls back to $ patterns.
+    Returns '$15', '$10\u2013$20', 'Free', or ''."""
+    if not url or url == SHOWLIST_URL:
+        return ""
+    if url in PRICE_CACHE:
+        return PRICE_CACHE[url]
+    price = ""
+    try:
+        r = requests.get(url, headers=UA, timeout=15, allow_redirects=True)
+        if r.status_code == 200 and "text/html" in r.headers.get(
+                "Content-Type", "text/html"):
+            html_text = r.text[:600000]
+            # 1) JSON-LD offers
+            for m in re.finditer(
+                r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>',
+                html_text, re.S | re.I,
+            ):
+                try:
+                    data = json.loads(m.group(1).strip())
+                except Exception:
+                    continue
+                stack = data if isinstance(data, list) else [data]
+                while stack and not price:
+                    node = stack.pop()
+                    if not isinstance(node, dict):
+                        continue
+                    offers = node.get("offers")
+                    if offers:
+                        offers = offers if isinstance(offers, list) else [offers]
+                        los, his = [], []
+                        for o in offers:
+                            if not isinstance(o, dict):
+                                continue
+                            for k in ("price", "lowPrice"):
+                                v = o.get(k)
+                                if v not in (None, ""):
+                                    try:
+                                        los.append(float(v))
+                                    except (TypeError, ValueError):
+                                        pass
+                            v = o.get("highPrice")
+                            if v not in (None, ""):
+                                try:
+                                    his.append(float(v))
+                                except (TypeError, ValueError):
+                                    pass
+                        if los:
+                            lo = min(los)
+                            hi = max(his) if his else max(los)
+                            if lo == 0 and hi == 0:
+                                price = "Free"
+                            elif 0 < lo <= 500:
+                                price = _fmt_price(lo, hi if hi != lo else None)
+                    for v in node.values():
+                        if isinstance(v, (dict, list)):
+                            stack.append(v)
+                if price:
+                    break
+            # 2) regex fallback near ticket-ish words
+            if not price:
+                text = re.sub(r"<[^>]+>", " ", html_text)
+                if re.search(r"(?i)\b(free show|free entry|no cover|"
+                             r"free admission)\b", text):
+                    price = "Free"
+                else:
+                    amounts = [
+                        float(a) for a in re.findall(
+                            r"\$\s?(\d{1,3}(?:\.\d{2})?)", text)
+                        if 3 <= float(a) <= 500
+                    ]
+                    if amounts:
+                        lo, hi = min(amounts), max(amounts)
+                        price = _fmt_price(lo, hi if hi > lo else None)
+    except Exception:
+        pass
+    PRICE_CACHE[url] = price
+    time.sleep(0.05)
+    return price
 
 
 # ---------------------------------------------------------------- Spotify ---
@@ -583,6 +677,7 @@ def compute_user_data(user, shows, sp=None):
                             "venue": show["venue"],
                             "time": show["time"],
                             "link": show["link"],
+                            "price": show_price(show["link"]),
                             "image": info.get("image") or dz["image"],
                             "spotify_url": info.get("url", ""),
                         }
@@ -640,6 +735,7 @@ def compute_user_data(user, shows, sp=None):
                 "venue": show["venue"],
                 "time": show["time"],
                 "link": show["link"],
+                "price": show_price(show["link"]),
             }
     log(f"  {len(matches)} matches; {checked} candidates checked, "
         f"{len(discover)} discovery picks")
@@ -732,7 +828,8 @@ def render_email(data, today, end, page_url=""):
                     f"style='{g_style};font-size:11px'>Spotify</a>"
                 )
             meta = " · ".join(
-                x for x in [fmt_iso(m["date"]), esc(m["venue"]), esc(m["time"])] if x
+                x for x in [fmt_iso(m["date"]), esc(m["venue"]),
+                            esc(m["time"]), esc(m.get("price", ""))] if x
             )
             parts.append(
                 email_card(m.get("image", ""), title, meta,
@@ -772,6 +869,7 @@ def render_email(data, today, end, page_url=""):
                     fmt_iso(e["date"]),
                     esc(e["venue"]),
                     esc(e["time"]),
+                    esc(e.get("price", "")),
                 ]
                 if x
             )
