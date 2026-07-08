@@ -109,15 +109,21 @@ Notes:
 - Beyond 25 people you'd need Spotify extended-quota approval (a review
   process) — at that point this becomes a real hosted app; different project
 
-## 🎧 Weekly Top Songs group email
+## 🎧 Weekly Top Songs group chat (GroupMe)
 
-Every Monday ~9am (an hour after the digest), one email goes to everyone
-in `USERS_JSON` — all on the To: line, so reply-all works like a group
-thread — with each person's most-played song of the past week (album art,
-play count, Spotify link).
+Every Monday ~9am (an hour after the digest) a bot posts each member's
+most-played song of the past week — with play count and Spotify link —
+into a GroupMe group. Friends can be in the group via plain SMS without
+installing the app.
 
-No extra setup: it reuses the Gmail + Spotify secrets already configured.
-Test it anytime: Actions → "Weekly Top Songs" → Run workflow.
+One-time setup:
+
+1. Create a free GroupMe account (groupme.com or the app), make a group,
+   and add your friends by phone number.
+2. Go to https://dev.groupme.com/bots → Create Bot → pick your group,
+   name it (e.g. "Song of the Week"), create, and copy the **Bot ID**.
+3. Add it as a repo secret: `GROUPME_BOT_ID`.
+4. Test: Actions → "Weekly Top Songs" → Run workflow.
 
 Accuracy note: play-history access requires the `user-read-recently-played`
 scope. Tokens authorized before this feature fall back to the short-term

@@ -17,11 +17,10 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Send top-songs group email
+      - name: Post top songs to GroupMe
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           USERS_JSON: ${{ secrets.USERS_JSON }}
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GROUPME_BOT_ID: ${{ secrets.GROUPME_BOT_ID }}
         run: python top_songs.py
