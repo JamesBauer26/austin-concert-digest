@@ -1,0 +1,26 @@
+name: Weekly Top Songs (GroupMe)
+
+on:
+  schedule:
+    # Mondays 14:00 UTC = 9:00 AM Austin (CDT), an hour after the digest.
+    - cron: "0 14 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  top-songs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Post top songs to GroupMe
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          USERS_JSON: ${{ secrets.USERS_JSON }}
+          GROUPME_BOT_ID: ${{ secrets.GROUPME_BOT_ID }}
+        run: python top_songs.py

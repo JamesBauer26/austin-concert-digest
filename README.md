@@ -109,6 +109,25 @@ Notes:
 - Beyond 25 people you'd need Spotify extended-quota approval (a review
   process) — at that point this becomes a real hosted app; different project
 
+## 🎧 Weekly Top Songs group chat
+
+Every Monday ~9am a bot posts each member's most-played song of the past
+week into a GroupMe group (`top_songs.py` + its own workflow).
+
+One-time setup:
+
+1. Create a free GroupMe account (groupme.com or the app), make a group,
+   and add your friends by phone number — they can chat via SMS without
+   the app if they prefer.
+2. Go to https://dev.groupme.com/bots → Create Bot → pick your group,
+   name it (e.g. "Song of the Week"), create, and copy the **Bot ID**.
+3. Add it as a repo secret: `GROUPME_BOT_ID`.
+4. Test: Actions → "Weekly Top Songs (GroupMe)" → Run workflow.
+
+Accuracy note: play-history access requires the `user-read-recently-played`
+scope. Tokens authorized before this feature fall back to the short-term
+top track; re-run the authorize + exchange flow to upgrade.
+
 ## Tuning
 
 - `LOOKAHEAD_DAYS` (env var or default in `digest.py`): window size, default 14

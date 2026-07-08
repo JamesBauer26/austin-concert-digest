@@ -19,7 +19,8 @@ import webbrowser
 import requests
 
 REDIRECT_URI = "http://127.0.0.1:8888/callback"
-SCOPES = "user-top-read user-follow-read user-library-read"
+SCOPES = ("user-top-read user-follow-read user-library-read "
+          "user-read-recently-played")
 
 code_holder = {}
 
