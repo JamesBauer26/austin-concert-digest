@@ -211,11 +211,15 @@ def mb_tags(name):
         return []
 
 
-def artist_tags(name):
-    """Genre tags for an artist: Last.fm if key present, else MusicBrainz."""
+def artist_tags(name, mb_fallback=None):
+    """Genre tags: Last.fm when key present, MusicBrainz otherwise.
+    MB is slow (1 req/s), so with a Last.fm key it is only used as a
+    fallback where mb_fallback=True (the user's own profile artists)."""
     key = norm(name)
     if key in TAG_CACHE:
         return TAG_CACHE[key]
+    if mb_fallback is None:
+        mb_fallback = not LASTFM_KEY
     tags = []
     if LASTFM_KEY:
         data = lastfm_get("artist.gettoptags", artist=name)
@@ -225,8 +229,8 @@ def artist_tags(name):
             if int(t.get("count", 0) or 0) >= 10
         ]
         tags = clean_tags(raw)
-        time.sleep(0.15)
-    if not tags:
+        time.sleep(0.08)
+    if not tags and mb_fallback:
         tags = mb_tags(name)
     TAG_CACHE[key] = tags
     return tags
@@ -243,7 +247,7 @@ def similar_artists(name):
     sims = [a.get("name", "")
             for a in data.get("similarartists", {}).get("artist", [])]
     SIMILAR_CACHE[key] = sims
-    time.sleep(0.15)
+    time.sleep(0.08)
     return sims
 
 
@@ -275,7 +279,7 @@ def deezer_info(name):
     except Exception:
         pass
     DEEZER_CACHE[key] = info
-    time.sleep(0.1)
+    time.sleep(0.05)
     return info
 
 
@@ -386,7 +390,7 @@ class Spotify:
         except Exception:
             pass
         SP_CACHE[key] = result
-        time.sleep(0.1)
+        time.sleep(0.05)
         return result
 
     def top_tracks(self, artist_id, n=3):
@@ -519,7 +523,7 @@ def build_profile(mine, top_n=60):
     ranked = sorted(mine.values(), key=lambda a: a["rank"])[:top_n]
     for a in ranked:
         w = 3.0 if a["rank"] < 300 else (2.0 if a["rank"] < 600 else 1.0)
-        tags = artist_tags(a["name"])
+        tags = artist_tags(a["name"], mb_fallback=True)
         fams = genre_families(tags)
         artist_fams[a["name"]] = fams
         for t in tags:
