@@ -1,4 +1,4 @@
-name: Weekly Top Songs (GroupMe)
+name: Weekly Top Songs
 
 on:
   schedule:
@@ -17,10 +17,11 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Post top songs to GroupMe
+      - name: Send top-songs group email
         env:
           SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           USERS_JSON: ${{ secrets.USERS_JSON }}
-          GROUPME_BOT_ID: ${{ secrets.GROUPME_BOT_ID }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python top_songs.py
