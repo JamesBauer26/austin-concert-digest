@@ -111,7 +111,7 @@ Notes:
 
 ## 🎧 Weekly Top Songs group chat (GroupMe)
 
-Every Monday ~9am (an hour after the digest) a bot posts each member's
+Every Wednesday evening (~7pm Austin) a bot posts each member's
 most-played song of the past week — with play count and Spotify link —
 into a GroupMe group. Friends can be in the group via plain SMS without
 installing the app.

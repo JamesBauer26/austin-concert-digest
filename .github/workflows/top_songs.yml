@@ -2,8 +2,8 @@ name: Weekly Top Songs
 
 on:
   schedule:
-    # Mondays 14:00 UTC = 9:00 AM Austin (CDT), an hour after the digest.
-    - cron: "0 14 * * 1"
+    # Thursdays 00:00 UTC = Wednesday 7:00 PM Austin (CDT); 6 PM in winter.
+    - cron: "0 0 * * 4"
   workflow_dispatch: {}
 
 jobs:
