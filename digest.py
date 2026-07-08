@@ -5,17 +5,19 @@ Scrapes austin.showlists.net once, then for EACH user: matches shows against
 their Spotify listening, emails a card-style personalized digest, and builds
 an interactive web page (published via GitHub Pages by the workflow).
 
+Data sources (Spotify removed genre data for new API apps, so):
+  Spotify     — the user's listening profile + direct artist matching
+  MusicBrainz — genre tags for taste-matching (free, keyless)
+  Deezer      — artist photos + top songs with 30s previews (free, keyless)
+  Last.fm     — OPTIONAL, better tags + true similar-artists if
+                LASTFM_API_KEY secret is set
+
 Config via environment variables:
   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET   (one shared Spotify app)
   GMAIL_ADDRESS, GMAIL_APP_PASSWORD          (sender account)
-  USERS_JSON  — JSON list of users:
-      [{"name": "James", "email": "you@x.com", "refresh_token": "..."}, ...]
-      optional per-user "slug" to pin their page URL
-  (Legacy single-user fallback: SPOTIFY_REFRESH_TOKEN + DIGEST_TO)
+  USERS_JSON  — JSON list: [{"name","email","refresh_token"[,"slug"]}, ...]
 Optional:
-  LOOKAHEAD_DAYS (default 14), MIN_SCORE (default 1)
-  BUILD_SITE ("1" default — writes ./site for GitHub Pages)
-  PAGES_BASE_URL (auto-derived from GITHUB_REPOSITORY when in Actions)
+  LASTFM_API_KEY, LOOKAHEAD_DAYS (14), MIN_SCORE (0.01), BUILD_SITE ("1")
 """
 
 import hashlib
@@ -36,12 +38,21 @@ from bs4 import BeautifulSoup
 
 SHOWLIST_URL = "https://austin.showlists.net/"
 SPOTIFY_API = "https://api.spotify.com/v1"
-LOOKAHEAD_DAYS = int(os.environ.get("LOOKAHEAD_DAYS", "14"))
-MIN_SCORE = float(os.environ.get("MIN_SCORE", "1"))
+MB_API = "https://musicbrainz.org/ws/2"
+DEEZER_API = "https://api.deezer.com"
+LASTFM_API = "https://ws.audioscrobbler.com/2.0/"
+LASTFM_KEY = os.environ.get("LASTFM_API_KEY", "").strip()
+UA = {"User-Agent": "AustinConcertDigest/2.0 (personal concert digest)"}
 
-# Shared across users so each artist is only looked up once per run.
-ARTIST_CACHE = {}   # norm name -> artist info dict or None
-TRACKS_CACHE = {}   # artist id -> [{"name","url","preview"}]
+LOOKAHEAD_DAYS = int(os.environ.get("LOOKAHEAD_DAYS", "14"))
+MIN_SCORE = float(os.environ.get("MIN_SCORE", "0.01"))
+
+# Caches shared across users so each artist is only looked up once per run.
+TAG_CACHE = {}      # norm name -> [tags]
+SIMILAR_CACHE = {}  # norm name -> [similar artist names] (last.fm only)
+DEEZER_CACHE = {}   # norm name -> {"image","url","songs"}
+SP_CACHE = {}       # norm name -> spotify info dict or None
+TRACKS_CACHE = {}   # spotify artist id -> [{"name","url","preview"}]
 
 SKIP_KEYWORDS = [
     "world cup", "bingo", "trivia", "karaoke", "open mic", "comedy",
@@ -50,31 +61,47 @@ SKIP_KEYWORDS = [
 ]
 TRIBUTE_KEYWORDS = ["tribute", "covers", "plays the music of", "songs of"]
 
+JUNK_TAGS = {
+    "seen live", "favorites", "favourites", "favourite", "spotify", "all",
+    "usa", "american", "america", "british", "uk", "english", "canadian",
+    "australian", "german", "french", "swedish", "norwegian", "japanese",
+    "austin", "texas", "male vocalists", "female vocalists", "male vocalist",
+    "female vocalist", "under 2000 listeners", "60s", "70s", "80s", "90s",
+    "00s", "10s", "20s", "2020s", "oldies", "check out",
+}
+
 GENRE_FAMILIES = {
     "Hip-Hop / R&B": [
-        "hip hop", "hip-hop", "rap", "trap", "drill", "r&b", "rnb",
-        "neo soul", "neo-soul", "urban", "grime",
+        "hip hop", "hip-hop", "hip hop rnb and dance hall", "rap", "trap",
+        "drill", "r&b", "rnb", "rhythm and blues", "neo soul", "neo-soul",
+        "grime", "boom bap",
     ],
     "Indie / Synth / Electronic": [
         "indie", "synth", "dream pop", "shoegaze", "electronic", "electronica",
         "house", "techno", "edm", "dance", "indietronica", "chillwave",
         "new wave", "psych", "garage rock", "lo-fi", "bedroom", "art pop",
-        "alternative", "post-punk", "new rave", "downtempo", "ambient pop",
+        "alternative", "post-punk", "post punk", "new rave", "downtempo",
+        "ambient", "idm", "trance", "drum and bass", "dubstep", "surf",
     ],
     "Punk / Metal / Hardcore": [
         "punk", "metal", "hardcore", "emo", "screamo", "metalcore",
-        "post-hardcore", "grunge", "thrash", "death metal", "doom", "sludge",
-        "powerviolence", "ska",
+        "post-hardcore", "post hardcore", "grunge", "thrash", "death metal",
+        "doom", "sludge", "powerviolence", "ska", "grindcore", "noise rock",
     ],
     "Classic / Rock / Singer-Songwriter": [
-        "classic rock", "soft rock", "rock", "singer-songwriter", "piano",
-        "folk", "americana", "country", "blues", "soul", "funk", "pop rock",
-        "mellow gold", "yacht rock", "adult standards",
+        "classic rock", "soft rock", "rock", "singer-songwriter",
+        "singer/songwriter", "piano", "folk", "americana", "country",
+        "blues", "soul", "funk", "pop rock", "rock and roll", "jam band",
+        "psychedelic rock", "roots",
     ],
     "Pop": [
-        "pop", "dance pop", "electropop", "k-pop", "latin",
+        "pop", "dance pop", "electropop", "k-pop", "latin", "reggaeton",
     ],
 }
+WILDCARD = "Wildcards"
+FAMILY_ORDER = list(GENRE_FAMILIES) + [WILDCARD]
+
+_last_mb = [0.0]
 
 
 def log(msg):
@@ -129,6 +156,129 @@ def load_users():
     ]
 
 
+# --------------------------------------------------------------- Tag data ---
+
+def clean_tags(raw_tags):
+    out = []
+    for t in raw_tags:
+        tn = t.strip().lower()
+        if tn and tn not in JUNK_TAGS and len(tn) < 40 and tn not in out:
+            out.append(tn)
+    return out[:8]
+
+
+def lastfm_get(method, **params):
+    try:
+        r = requests.get(
+            LASTFM_API,
+            params={"method": method, "api_key": LASTFM_KEY, "format": "json",
+                    "autocorrect": 1, **params},
+            headers=UA, timeout=20,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return {}
+
+
+def mb_tags(name):
+    """MusicBrainz artist search -> tags/genres. Keyless; 1 req/sec."""
+    wait = 1.1 - (time.time() - _last_mb[0])
+    if wait > 0:
+        time.sleep(wait)
+    _last_mb[0] = time.time()
+    try:
+        r = requests.get(
+            f"{MB_API}/artist",
+            params={"query": f'artist:"{name}"', "fmt": "json", "limit": 3},
+            headers=UA, timeout=20,
+        )
+        if r.status_code != 200:
+            return []
+        best, best_sim = None, 0.0
+        for a in r.json().get("artists", []):
+            s = similar(a.get("name", ""), name)
+            if s > best_sim:
+                best, best_sim = a, s
+        if not best or best_sim < 0.87:
+            return []
+        tags = [t.get("name", "") for t in
+                sorted(best.get("tags", []),
+                       key=lambda t: -int(t.get("count", 0) or 0))]
+        return clean_tags(tags)
+    except Exception:
+        return []
+
+
+def artist_tags(name):
+    """Genre tags for an artist: Last.fm if key present, else MusicBrainz."""
+    key = norm(name)
+    if key in TAG_CACHE:
+        return TAG_CACHE[key]
+    tags = []
+    if LASTFM_KEY:
+        data = lastfm_get("artist.gettoptags", artist=name)
+        raw = [
+            t.get("name", "")
+            for t in data.get("toptags", {}).get("tag", [])
+            if int(t.get("count", 0) or 0) >= 10
+        ]
+        tags = clean_tags(raw)
+        time.sleep(0.15)
+    if not tags:
+        tags = mb_tags(name)
+    TAG_CACHE[key] = tags
+    return tags
+
+
+def similar_artists(name):
+    """True similar-artist list (Last.fm only; empty without a key)."""
+    if not LASTFM_KEY:
+        return []
+    key = norm(name)
+    if key in SIMILAR_CACHE:
+        return SIMILAR_CACHE[key]
+    data = lastfm_get("artist.getsimilar", artist=name, limit=80)
+    sims = [a.get("name", "")
+            for a in data.get("similarartists", {}).get("artist", [])]
+    SIMILAR_CACHE[key] = sims
+    time.sleep(0.15)
+    return sims
+
+
+def deezer_info(name):
+    """Artist photo + top songs with 30s previews. Keyless."""
+    key = norm(name)
+    if key in DEEZER_CACHE:
+        return DEEZER_CACHE[key]
+    info = {"image": "", "url": "", "songs": []}
+    try:
+        r = requests.get(f"{DEEZER_API}/search/artist",
+                         params={"q": name, "limit": 3}, headers=UA, timeout=20)
+        best, best_sim = None, 0.0
+        for a in r.json().get("data", []):
+            s = similar(a.get("name", ""), name)
+            if s > best_sim:
+                best, best_sim = a, s
+        if best and best_sim >= 0.85:
+            info["image"] = best.get("picture_medium") or best.get("picture") or ""
+            info["url"] = best.get("link", "")
+            rt = requests.get(f"{DEEZER_API}/artist/{best['id']}/top",
+                              params={"limit": 3}, headers=UA, timeout=20)
+            for t in rt.json().get("data", []):
+                info["songs"].append({
+                    "name": t.get("title", ""),
+                    "url": t.get("link", ""),
+                    "preview": t.get("preview", "") or "",
+                })
+    except Exception:
+        pass
+    DEEZER_CACHE[key] = info
+    time.sleep(0.1)
+    return info
+
+
 # ---------------------------------------------------------------- Spotify ---
 
 def spotify_token(refresh_token):
@@ -162,23 +312,21 @@ class Spotify:
         raise RuntimeError(f"Spotify GET {path} kept failing")
 
     def my_artists(self):
-        """{norm_name: {"name","genres","rank"}} from top/followed/saved."""
+        """{norm_name: {"name","rank"}} from top/followed/saved-track artists.
+        Lower rank = stronger signal. (No genres — Spotify no longer provides
+        them to new apps; tags come from MusicBrainz/Last.fm instead.)"""
         artists = {}
 
-        def add(name, genres, rank):
+        def add(name, rank):
             key = norm(name)
-            if not key:
-                return
-            if key not in artists or rank < artists[key]["rank"]:
-                artists[key] = {"name": name, "genres": genres or [], "rank": rank}
-            elif genres and not artists[key]["genres"]:
-                artists[key]["genres"] = genres
+            if key and (key not in artists or rank < artists[key]["rank"]):
+                artists[key] = {"name": name, "rank": rank}
 
         for i, rng in enumerate(["short_term", "medium_term", "long_term"]):
             try:
                 data = self.get("/me/top/artists", {"time_range": rng, "limit": 50})
                 for pos, a in enumerate(data.get("items", [])):
-                    add(a["name"], a.get("genres"), i * 100 + pos)
+                    add(a["name"], i * 100 + pos)
             except Exception as e:
                 log(f"  warn: top artists ({rng}) failed: {e}")
 
@@ -190,7 +338,7 @@ class Spotify:
                     params["after"] = after
                 data = self.get("/me/following", params).get("artists", {})
                 for a in data.get("items", []):
-                    add(a["name"], a.get("genres"), 500)
+                    add(a["name"], 500)
                 after = data.get("cursors", {}).get("after")
                 if not after:
                     break
@@ -198,35 +346,27 @@ class Spotify:
             log(f"  warn: followed artists failed: {e}")
 
         try:
-            ids = {}
             for offset in range(0, 200, 50):
                 data = self.get("/me/tracks", {"limit": 50, "offset": offset})
                 for item in data.get("items", []):
                     for a in item["track"]["artists"]:
-                        ids[a["id"]] = a["name"]
+                        add(a["name"], 700)
                 if not data.get("next"):
                     break
-            id_list = list(ids)
-            for i in range(0, len(id_list), 50):
-                data = self.get("/artists", {"ids": ",".join(id_list[i : i + 50])})
-                for a in data.get("artists", []):
-                    if a:
-                        add(a["name"], a.get("genres"), 700)
         except Exception as e:
             log(f"  warn: saved tracks failed: {e}")
 
         noise = ("white noise", "sleep", "rain sounds", "brown noise", "asmr")
         return {
-            k: v
-            for k, v in artists.items()
-            if not any(n in k or any(n in g for g in v["genres"]) for n in noise)
+            k: v for k, v in artists.items()
+            if not any(n in k for n in noise)
         }
 
     def lookup_artist(self, name):
-        """Search Spotify for an artist (cached across users)."""
+        """Spotify search (for link/image/top-tracks id). Cached."""
         key = norm(name)
-        if key in ARTIST_CACHE:
-            return ARTIST_CACHE[key]
+        if key in SP_CACHE:
+            return SP_CACHE[key]
         result = None
         try:
             data = self.get("/search", {"q": name, "type": "artist", "limit": 3})
@@ -240,34 +380,27 @@ class Spotify:
                 result = {
                     "id": best["id"],
                     "name": best["name"],
-                    "genres": best.get("genres", []),
-                    "popularity": best.get("popularity", 0),
                     "url": best.get("external_urls", {}).get("spotify", ""),
-                    "image": (images[-1]["url"] if images else ""),  # smallest
-                    "image_lg": (images[0]["url"] if images else ""),
+                    "image": (images[-1]["url"] if images else ""),
                 }
         except Exception:
             pass
-        ARTIST_CACHE[key] = result
+        SP_CACHE[key] = result
         time.sleep(0.1)
         return result
 
     def top_tracks(self, artist_id, n=3):
-        """[{"name","url","preview"}] for an artist (cached across users)."""
         if artist_id not in TRACKS_CACHE:
             tracks = []
             try:
-                data = self.get(
-                    f"/artists/{artist_id}/top-tracks", {"market": "US"}
-                )
+                data = self.get(f"/artists/{artist_id}/top-tracks",
+                                {"market": "US"})
                 for t in data.get("tracks", []):
-                    tracks.append(
-                        {
-                            "name": t["name"],
-                            "url": t.get("external_urls", {}).get("spotify", ""),
-                            "preview": t.get("preview_url") or "",
-                        }
-                    )
+                    tracks.append({
+                        "name": t["name"],
+                        "url": t.get("external_urls", {}).get("spotify", ""),
+                        "preview": t.get("preview_url") or "",
+                    })
             except Exception:
                 pass
             TRACKS_CACHE[artist_id] = tracks
@@ -278,11 +411,7 @@ class Spotify:
 
 def fetch_shows(html_text=None):
     if html_text is None:
-        r = requests.get(
-            SHOWLIST_URL,
-            headers={"User-Agent": "Mozilla/5.0 (concert-digest personal script)"},
-            timeout=60,
-        )
+        r = requests.get(SHOWLIST_URL, headers=UA, timeout=60)
         r.raise_for_status()
         html_text = r.text
     soup = BeautifulSoup(html_text, "html.parser")
@@ -374,9 +503,9 @@ def is_tribute(title):
 
 # --------------------------------------------------------------- Matching ---
 
-def genre_families(genres):
+def genre_families(tags):
     fams = set()
-    for g in genres:
+    for g in tags:
         gl = g.lower()
         for fam, keywords in GENRE_FAMILIES.items():
             if any(k in gl for k in keywords):
@@ -384,39 +513,54 @@ def genre_families(genres):
     return fams
 
 
-def build_profile(my_artists):
-    weights = {f: 0.0 for f in GENRE_FAMILIES}
-    for a in my_artists.values():
+def build_profile(mine, top_n=60):
+    """Tag + family weight profiles from the user's top artists."""
+    tag_w, fam_w, artist_fams = {}, {}, {}
+    ranked = sorted(mine.values(), key=lambda a: a["rank"])[:top_n]
+    for a in ranked:
         w = 3.0 if a["rank"] < 300 else (2.0 if a["rank"] < 600 else 1.0)
-        for fam in genre_families(a["genres"]):
-            weights[fam] += w
-    total = sum(weights.values()) or 1.0
-    return {f: w / total for f, w in weights.items()}
+        tags = artist_tags(a["name"])
+        fams = genre_families(tags)
+        artist_fams[a["name"]] = fams
+        for t in tags:
+            tag_w[t] = tag_w.get(t, 0.0) + w
+        for f in fams:
+            fam_w[f] = fam_w.get(f, 0.0) + w
+    ts = sum(tag_w.values()) or 1.0
+    fs = sum(fam_w.values()) or 1.0
+    return (
+        {t: w / ts for t, w in tag_w.items()},
+        {f: w / fs for f, w in fam_w.items()},
+        artist_fams,
+    )
 
 
-def similar_listened(rec_genres, my_artists, n=3):
-    rec_fams = genre_families(rec_genres)
-    rec_tokens = set(t for g in rec_genres for t in g.lower().split())
-    scored = []
-    for a in my_artists.values():
-        toks = set(t for g in a["genres"] for t in g.lower().split())
-        overlap = len(rec_tokens & toks)
-        fam_overlap = len(rec_fams & genre_families(a["genres"]))
-        if overlap or fam_overlap:
-            scored.append((-(overlap * 2 + fam_overlap), a["rank"], a["name"]))
-    scored.sort()
-    return [name for _, _, name in scored[:n]]
+def known_similar(cand_name, cand_fams, mine, artist_fams):
+    """Artists the user listens to that relate to the candidate.
+    Prefers Last.fm true-similarity, falls back to shared genre family."""
+    user_by_norm = {k: v["name"] for k, v in mine.items()}
+    sims = similar_artists(cand_name)
+    hits = [user_by_norm[norm(s)] for s in sims if norm(s) in user_by_norm]
+    if hits:
+        return hits[:3]
+    ranked = sorted(
+        (a for a in mine.values() if artist_fams.get(a["name"]) and
+         cand_fams & artist_fams[a["name"]]),
+        key=lambda a: a["rank"],
+    )
+    return [a["name"] for a in ranked[:3]]
 
 
 # ---------------------------------------------------------------- Compute ---
 
 def compute_user_data(user, shows, sp=None):
-    """Everything needed to render one user's email + page. Dates -> ISO."""
     sp = sp or Spotify(user["refresh_token"])
     mine = sp.my_artists()
-    profile = build_profile(mine)
-    log(f"  {len(mine)} artists; taste "
-        f"{ {k: round(v, 2) for k, v in profile.items() if v} }")
+    log(f"  {len(mine)} artists in profile")
+    tag_profile, fam_profile, artist_fams = build_profile(mine)
+    top_tags = sorted(tag_profile, key=tag_profile.get, reverse=True)[:10]
+    log(f"  top tags: {top_tags}")
+    log(f"  families: { {f: round(w, 2) for f, w in fam_profile.items()} }")
 
     matches = []
     for show in shows:
@@ -426,6 +570,7 @@ def compute_user_data(user, shows, sp=None):
             for a in mine.values():
                 if similar(cand, a["name"]) >= 0.92:
                     info = sp.lookup_artist(a["name"]) or {}
+                    dz = deezer_info(a["name"])
                     matches.append(
                         {
                             "artist": a["name"],
@@ -434,7 +579,7 @@ def compute_user_data(user, shows, sp=None):
                             "venue": show["venue"],
                             "time": show["time"],
                             "link": show["link"],
-                            "image": info.get("image", ""),
+                            "image": info.get("image") or dz["image"],
                             "spotify_url": info.get("url", ""),
                         }
                     )
@@ -442,7 +587,7 @@ def compute_user_data(user, shows, sp=None):
 
     matched_titles = {m["title"] for m in matches}
 
-    discover = {}
+    discover, checked = {}, 0
     for show in shows:
         if show["title"] in matched_titles or is_skippable(show["title"]):
             continue
@@ -452,29 +597,48 @@ def compute_user_data(user, shows, sp=None):
             key = norm(cand)
             if not key or key in discover or key in mine:
                 continue
-            info = sp.lookup_artist(cand)
-            if not info or not info["genres"]:
-                continue
-            fams = genre_families(info["genres"])
-            score = sum(profile.get(f, 0) * 10 for f in fams)
+            checked += 1
+            tags = artist_tags(cand)
+            if not tags:
+                continue  # unidentifiable — skip rather than guess
+            fams = genre_families(tags)
+            score = 2.0 * sum(tag_profile.get(t, 0.0) for t in tags) + sum(
+                fam_profile.get(f, 0.0) for f in fams
+            )
             if score < MIN_SCORE:
                 continue
-            family = max(fams, key=lambda f: profile.get(f, 0))
+            family = (
+                max(fams, key=lambda f: fam_profile.get(f, 0.0))
+                if fams else WILDCARD
+            )
+            sp_info = sp.lookup_artist(cand)
+            dz = deezer_info(cand)
+            songs = sp.top_tracks(sp_info["id"]) if sp_info else []
+            if songs:
+                for s in songs:  # borrow Deezer previews when Spotify has none
+                    if not s["preview"]:
+                        for d in dz["songs"]:
+                            if similar(s["name"], d["name"]) > 0.75:
+                                s["preview"] = d["preview"]
+                                break
+            else:
+                songs = dz["songs"]
             discover[key] = {
-                "name": info["name"],
-                "genres": info["genres"][:3],
+                "name": (sp_info or {}).get("name") or cand,
+                "genres": tags[:3],
                 "family": family,
-                "score": round(score + info["popularity"] / 100.0, 3),
-                "similar": similar_listened(info["genres"], mine),
-                "songs": sp.top_tracks(info["id"]),
-                "spotify_url": info["url"],
-                "image": info["image"],
+                "score": round(score, 4),
+                "similar": known_similar(cand, fams, mine, artist_fams),
+                "songs": songs[:3],
+                "spotify_url": (sp_info or {}).get("url", ""),
+                "image": (sp_info or {}).get("image") or dz["image"],
                 "date": show["date"].isoformat(),
                 "venue": show["venue"],
                 "time": show["time"],
                 "link": show["link"],
             }
-    log(f"  {len(matches)} matches, {len(discover)} discovery picks")
+    log(f"  {len(matches)} matches; {checked} candidates checked, "
+        f"{len(discover)} discovery picks")
 
     return {
         "name": user["name"],
@@ -582,7 +746,7 @@ def render_email(data, today, end, page_url=""):
     by_family = {}
     for e in data["discover"]:
         by_family.setdefault(e["family"], []).append(e)
-    for fam in GENRE_FAMILIES:
+    for fam in FAMILY_ORDER:
         entries = by_family.get(fam, [])
         if not entries:
             continue
@@ -656,7 +820,9 @@ def main():
     today = date.today()
     end = today + timedelta(days=LOOKAHEAD_DAYS - 1)
     base_url = pages_base_url()
-    log(f"Window {today}..{end} | users: {len(users)} | pages: {base_url or '-'}")
+    log(f"Window {today}..{end} | users: {len(users)} | "
+        f"tags via {'Last.fm' if LASTFM_KEY else 'MusicBrainz'} | "
+        f"pages: {base_url or '-'}")
 
     log("Scraping Showlist Austin...")
     shows = [s for s in fetch_shows() if today <= s["date"] <= end]
@@ -664,7 +830,7 @@ def main():
 
     all_data, failures = [], []
     for user in users:
-        log(f"=== {user['name']} <{user['email']}> ===")
+        log(f"=== {user['name']} ===")
         try:
             data = compute_user_data(user, shows)
             page_url = f"{base_url}/u/{data['slug']}/" if base_url else ""
@@ -681,9 +847,7 @@ def main():
                     "⚠️ Your Austin Concert Digest failed this week",
                     f"<p>This week's digest hit an error:</p>"
                     f"<pre>{esc(str(e))}</pre>"
-                    "<p>Most common cause: your Spotify authorization expired "
-                    "— re-run the connect step and send the new token to "
-                    "whoever runs the digest.</p>",
+                    "<p>Most common cause: your Spotify authorization expired.</p>",
                 )
             except Exception:
                 pass

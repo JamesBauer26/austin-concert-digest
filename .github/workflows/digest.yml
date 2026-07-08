@@ -39,6 +39,7 @@ jobs:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           USERS_JSON: ${{ secrets.USERS_JSON }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
         run: python digest.py
 
       - name: Configure Pages

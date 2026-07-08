@@ -12,6 +12,7 @@ FAMILIES = [
     "Punk / Metal / Hardcore",
     "Classic / Rock / Singer-Songwriter",
     "Pop",
+    "Wildcards",
 ]
 
 LANDING = """<!doctype html><html><head><meta charset="utf-8">
