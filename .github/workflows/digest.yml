@@ -40,6 +40,8 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           USERS_JSON: ${{ secrets.USERS_JSON }}
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          GROUPME_BOT_ID: ${{ secrets.GROUPME_BOT_ID }}
+          GROUPME_JOIN_URL: ${{ secrets.GROUPME_JOIN_URL }}
         run: python digest.py
 
       - name: Configure Pages

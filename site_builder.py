@@ -309,16 +309,24 @@ the group chat. Connecting your Spotify takes ~30 seconds:</p>
 <p class="err hide" id="err1"></p>
 </div>
 <div id="step2" class="hide">
-<p><b style="color:#fff">You're in \U0001F389</b> — copy this whole block and
-text/DM it to James. He'll add you and your songs start appearing in the
-group chat.</p>
+<p><b style="color:#fff">You're in \U0001F389</b></p>
+<p id="sent" class="hide">Your signup was sent to the group chat
+automatically — you'll be added within the hour, and your songs start
+appearing on Wednesdays. One last thing: join the chat itself \u2B07\uFE0F</p>
+<a id="grouplink" class="btn hide" href="#" target="_blank">Join the
+group chat</a>
+<div id="manual">
+<p>Copy this block and text/DM it to James — he'll add you:</p>
 <pre id="snippet"></pre>
 <button id="copy">Copy to clipboard</button>
+</div>
 <p class="err hide" id="err2"></p>
 </div>
 <script>
 var CLIENT_ID = "__CLIENT_ID__";
 var REDIRECT = "__REDIRECT__";
+var BOT_ID = "__BOT_ID__";
+var GROUP_LINK = "__GROUP_LINK__";
 var SCOPES = "user-top-read user-follow-read user-library-read " +
              "user-read-recently-played";
 
@@ -381,6 +389,23 @@ function show(id, msg){
       navigator.clipboard.writeText(snippet);
       this.textContent = "Copied \u2713";
     });
+    if (BOT_ID){
+      try {
+        await fetch("https://api.groupme.com/v3/bots/post", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({bot_id: BOT_ID,
+            text: "🆕 SIGNUP " + (name || "someone") +
+                  " just connected Spotify:\\n" + snippet}),
+        });
+        document.getElementById("sent").classList.remove("hide");
+        document.getElementById("manual").classList.add("hide");
+      } catch (e) {}
+    }
+    if (GROUP_LINK){
+      var g = document.getElementById("grouplink");
+      g.href = GROUP_LINK; g.classList.remove("hide");
+    }
     history.replaceState(null, "", REDIRECT);
   } catch (e) {
     show("err2", "Hmm, that didn't work (" + e.message + "). Most common " +
@@ -417,7 +442,11 @@ def build_site(users_data, out_dir, today, end):
                   encoding="utf-8") as f:
             f.write(JOIN_TEMPLATE
                     .replace("__CLIENT_ID__", client_id)
-                    .replace("__REDIRECT__", base + "/join/"))
+                    .replace("__REDIRECT__", base + "/join/")
+                    .replace("__BOT_ID__",
+                             os.environ.get("GROUPME_BOT_ID", ""))
+                    .replace("__GROUP_LINK__",
+                             os.environ.get("GROUPME_JOIN_URL", "")))
     window = (
         f"{today.strftime('%b')} {today.day} – {end.strftime('%b')} {end.day}, "
         f"{end.year}"

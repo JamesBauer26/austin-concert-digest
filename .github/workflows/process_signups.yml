@@ -1,0 +1,25 @@
+name: Process Signups
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly
+  workflow_dispatch: {}
+
+jobs:
+  signups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install requests pynacl
+      - name: Enroll new members from GroupMe signups
+        env:
+          GROUPME_ACCESS_TOKEN: ${{ secrets.GROUPME_ACCESS_TOKEN }}
+          GROUPME_BOT_ID: ${{ secrets.GROUPME_BOT_ID }}
+          USERS_JSON: ${{ secrets.USERS_JSON }}
+          ADMIN_PAT: ${{ secrets.ADMIN_PAT }}
+        run: python process_signups.py
